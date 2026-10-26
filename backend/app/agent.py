@@ -7,6 +7,10 @@ from app.mac_tools import open_app, open_website, open_path
 from app.browser_tools import (
     search_youtube,
     open_first_youtube_result,
+    go_back,
+    refresh_page,
+    read_page,
+    click_text,
 )
 
 
@@ -17,6 +21,10 @@ TOOLS = {
     "open_path": open_path,
     "search_youtube": search_youtube,
     "open_first_youtube_result": open_first_youtube_result,
+    "go_back": go_back,
+    "refresh_page": refresh_page,
+    "read_page": read_page,
+    "click_text": click_text,
 }
 
 
@@ -25,13 +33,25 @@ TOOL_DEFINITIONS = []
 
 for name, description, parameter in [
     (
-    "open_app",
-    "Open an approved macOS application. Use a short lowercase app name such as teams, chrome, safari, whatsapp, zoom, spotify, finder, or vscode.",
-    "app_name"
+        "open_app",
+        "Open an approved macOS application. Use a short lowercase app name such as teams, chrome, safari, whatsapp, zoom, spotify, finder, or vscode.",
+        "app_name",
     ),
-    ("open_website", "Open a website in the browser", "url"),
-    ("open_path", "Open an approved local file or folder", "path"),
-    ("search_youtube", "Search YouTube for videos using the browser.", "query"),
+    (
+        "open_website",
+        "Open a website in the browser.",
+        "url",
+    ),
+    (
+        "open_path",
+        "Open an approved local file or folder.",
+        "path",
+    ),
+    (
+        "search_youtube",
+        "Search YouTube for videos using the browser. Only search; do not open a video.",
+        "query",
+    ),
 ]:
     TOOL_DEFINITIONS.append({
         "type": "function",
@@ -47,11 +67,12 @@ for name, description, parameter in [
         },
         "strict": True,
     })
-    
+
+
 TOOL_DEFINITIONS.append({
     "type": "function",
     "name": "open_first_youtube_result",
-    "description": "Open the first video from the current YouTube search results page.",
+    "description": "Open the first video from the current YouTube search results page. Only use this when the user explicitly asks to open a video.",
     "parameters": {
         "type": "object",
         "properties": {},
@@ -61,16 +82,91 @@ TOOL_DEFINITIONS.append({
     "strict": True,
 })
 
+
+TOOL_DEFINITIONS.append({
+    "type": "function",
+    "name": "go_back",
+    "description": "Go back to the previous page in the Nexa browser.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+})
+
+
+TOOL_DEFINITIONS.append({
+    "type": "function",
+    "name": "refresh_page",
+    "description": "Refresh the current page in the Nexa browser.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+})
+
+
+TOOL_DEFINITIONS.append({
+    "type": "function",
+    "name": "read_page",
+    "description": (
+        "Read the visible text from the webpage currently open in the Nexa browser. "
+        "Use this when the user says things like 'read this page', "
+        "'what is this page about', or 'summarize this page'. "
+        "Do not ask the user for a URL if a page is already open in the Nexa browser."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+})
+
+TOOL_DEFINITIONS.append({
+    "type": "function",
+    "name": "click_text",
+    "description": (
+        "Click an element on the current Nexa browser page using its visible text. "
+        "Use this when the user explicitly asks to click a button, link, or other visible element."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "text": {
+                "type": "string"
+            }
+        },
+        "required": ["text"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+})
+
+
+AGENT_INSTRUCTIONS = (
+    "You are Nexa, an AI desktop agent for macOS. "
+    "Perform exactly the actions requested by the user. "
+    "Do not perform additional actions that were not requested. "
+    "You may use multiple tools only when the user's request explicitly requires multiple actions. "
+    "If the requested action is already complete, stop and respond. "
+    "If the user asks to search YouTube, only search YouTube unless they also explicitly ask to open a video. "
+    "Never claim an action succeeded without a tool result."
+    "If the user refers to 'this page' or 'the current page', use the read_page tool."
+)
+
+
 def run_agent(message: str):
     try:
         response = client.responses.create(
             model="gpt-4.1-mini",
-            instructions=(
-                "You are Nexa, an AI desktop agent for macOS. "
-                "Use tools when the user requests an action. "
-                "You may use multiple tools to complete one request. "
-                "Never claim an action succeeded without a tool result."
-            ),
+            instructions=AGENT_INSTRUCTIONS,
             input=message,
             tools=TOOL_DEFINITIONS,
             parallel_tool_calls=False,
@@ -86,12 +182,12 @@ def run_agent(message: str):
                 if item.type == "function_call"
             ]
 
-            # If there are no more tools, the task is finished
+            # No more tools needed
             if not tool_calls:
                 return {
                     "success": True,
                     "actions": actions,
-                    "message": response.output_text or "Task completed."
+                    "message": response.output_text or "Task completed.",
                 }
 
             tool_outputs = []
@@ -103,12 +199,12 @@ def run_agent(message: str):
                 if function_name not in TOOLS:
                     return {
                         "success": False,
-                        "message": "Tool not allowed."
+                        "message": "Tool not allowed.",
                     }
 
                 arguments = json.loads(item.arguments)
 
-                # Execute the selected tool
+                # Execute selected tool
                 result = TOOLS[function_name](**arguments)
 
                 actions.append({
@@ -116,8 +212,8 @@ def run_agent(message: str):
                     "arguments": arguments,
                     "result": result,
                 })
-
-                # Send the result back to OpenAI
+ 
+                # Send tool result back to OpenAI
                 tool_outputs.append({
                     "type": "function_call_output",
                     "call_id": item.call_id,
@@ -126,10 +222,7 @@ def run_agent(message: str):
 
             response = client.responses.create(
                 model="gpt-4.1-mini",
-                instructions=(
-                    "You are Nexa, an AI desktop agent for macOS. "
-                    "Continue using tools until the user's request is complete."
-                ),
+                instructions=AGENT_INSTRUCTIONS,
                 previous_response_id=response.id,
                 input=tool_outputs,
                 tools=TOOL_DEFINITIONS,
@@ -139,11 +232,11 @@ def run_agent(message: str):
         return {
             "success": False,
             "actions": actions,
-            "message": "Maximum tool steps reached."
+            "message": "Maximum tool steps reached.",
         }
 
     except (OpenAIError, ValueError, TypeError, OSError) as error:
         return {
             "success": False,
-            "message": f"Nexa error: {error}"
+            "message": f"Nexa error: {error}",
         }

@@ -60,3 +60,42 @@ def open_first_youtube_result():
         "success": True,
         "message": "Opened the first YouTube search result."
     }
+
+def go_back():
+    page = get_page()
+    page.go_back()
+
+    return {
+        "success": True,
+        "message": "Went back to the previous page."
+    }
+
+def refresh_page():
+    page = get_page()
+    page.reload()
+
+    return {
+        "success": True,
+        "message": "Refreshed the current page."
+    }
+
+def read_page():
+    page = get_page()
+
+    text = page.locator("body").inner_text()
+
+    return {
+        "success": True,
+        "content": text[:5000]
+    }
+
+def click_text(text: str):
+    page = get_page()
+
+    element = page.get_by_text(text, exact=True).first
+    element.click()
+
+    return {
+        "success": True,
+        "message": f"Clicked '{text}'."
+    }
