@@ -11,6 +11,10 @@ from app.browser_tools import (
     refresh_page,
     read_page,
     click_text,
+    type_text,
+    press_enter,
+    scroll_page,
+    stop_scrolling,
 )
 
 
@@ -25,6 +29,10 @@ TOOLS = {
     "refresh_page": refresh_page,
     "read_page": read_page,
     "click_text": click_text,
+    "type_text": type_text,
+    "press_enter": press_enter,
+    "scroll_page": scroll_page,
+    "stop_scrolling": stop_scrolling,
 }
 
 
@@ -149,6 +157,75 @@ TOOL_DEFINITIONS.append({
     "strict": True,
 })
 
+TOOL_DEFINITIONS.append({
+    "type": "function",
+    "name": "type_text",
+    "description": (
+        "Type text into an input field on the current webpage. "
+        "Use the visible placeholder of the input field to identify it."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "field": {
+                "type": "string"
+            },
+            "text": {
+                "type": "string"
+            }
+        },
+        "required": ["field", "text"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+})
+
+TOOL_DEFINITIONS.append({
+    "type": "function",
+    "name": "press_enter",
+    "description": (
+        "Press the Enter key in the current Nexa browser. "
+        "Use this when the user explicitly asks to press Enter or submit the current input."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+})
+
+TOOL_DEFINITIONS.append({
+    "type": "function",
+    "name": "scroll_page",
+    "description": "Scroll the current webpage up or down.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "direction": {
+                "type": "string",
+                "enum": ["up", "down"]
+            }
+        },
+        "required": ["direction"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+})
+
+TOOL_DEFINITIONS.append({
+    "type": "function",
+    "name": "stop_scrolling",
+    "description": "Stop the current automatic scrolling in the Nexa browser.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+})
 
 AGENT_INSTRUCTIONS = (
     "You are Nexa, an AI desktop agent for macOS. "

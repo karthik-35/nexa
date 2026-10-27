@@ -1,6 +1,6 @@
 from pathlib import Path
+import time
 from playwright.sync_api import sync_playwright
-
 
 playwright = None
 context = None
@@ -8,6 +8,71 @@ page = None
 
 PROFILE_PATH = Path.home() / ".nexa" / "browser-profile"
 
+
+def scroll_page(direction: str):
+    page = get_page()
+
+    if direction.lower() == "down":
+        speed = 1
+    elif direction.lower() == "up":
+        speed = -1
+    else:
+        return {
+            "success": False,
+            "message": "Direction must be 'up' or 'down'."
+        }
+
+    page.evaluate(
+        f"""
+        // Give this scrolling session a unique number
+        window.__nexaScrollGeneration =
+            (window.__nexaScrollGeneration || 0) + 1;
+
+        const myGeneration = window.__nexaScrollGeneration;
+
+        window.__nexaScrolling = true;
+
+        // Add the stop listener only once per page
+        if (!window.__nexaStopListenerAdded) {{
+
+            const stopScrolling = () => {{
+                window.__nexaScrolling = false;
+                window.__nexaScrollGeneration++;
+            }};
+
+            // Capture=true means Nexa sees the click BEFORE YouTube handles it
+            document.addEventListener(
+                "pointerdown",
+                stopScrolling,
+                true
+            );
+
+            window.__nexaStopListenerAdded = true;
+        }}
+
+        function smoothScroll() {{
+
+            // Stop old/duplicate scrolling loops
+            if (
+                !window.__nexaScrolling ||
+                myGeneration !== window.__nexaScrollGeneration
+            ) {{
+                return;
+            }}
+
+            window.scrollBy(0, {speed});
+
+            requestAnimationFrame(smoothScroll);
+        }}
+
+        requestAnimationFrame(smoothScroll);
+        """
+    )
+
+    return {
+        "success": True,
+        "message": f"Started slowly scrolling {direction}."
+    }
 
 def get_page():
     global playwright, context, page
@@ -98,4 +163,40 @@ def click_text(text: str):
     return {
         "success": True,
         "message": f"Clicked '{text}'."
+    }
+
+def type_text(field: str, text: str):
+    page = get_page()
+
+    input_box = page.get_by_placeholder(field).first
+    input_box.fill(text)
+
+    return {
+        "success": True,
+        "message": f"Typed '{text}' into '{field}'."
+    }
+
+def press_enter():
+    page = get_page()
+    page.keyboard.press("Enter")
+
+    return {
+        "success": True,
+        "message": "Pressed Enter."
+    }
+
+def stop_scrolling():
+    page = get_page()
+
+    page.evaluate("""
+        window.__nexaScrolling = false;
+
+        if (window.__nexaScrollGeneration) {
+            window.__nexaScrollGeneration++;
+        }
+    """)
+
+    return {
+        "success": True,
+        "message": "Stopped scrolling."
     }
