@@ -200,3 +200,24 @@ def stop_scrolling():
         "success": True,
         "message": "Stopped scrolling."
     }
+
+def get_page_elements():
+    page = get_page()
+
+    buttons = page.locator("button:visible").all_inner_texts()
+    links = page.locator("a:visible").all_inner_texts()
+
+    # Remove empty text and duplicates
+    buttons = list(dict.fromkeys(
+        text.strip() for text in buttons if text.strip()
+    ))
+
+    links = list(dict.fromkeys(
+        text.strip() for text in links if text.strip()
+    ))
+
+    return {
+        "success": True,
+        "buttons": buttons[:30],
+        "links": links[:30],
+    }

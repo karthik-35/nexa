@@ -15,6 +15,7 @@ from app.browser_tools import (
     press_enter,
     scroll_page,
     stop_scrolling,
+    get_page_elements,
 )
 
 
@@ -33,6 +34,7 @@ TOOLS = {
     "press_enter": press_enter,
     "scroll_page": scroll_page,
     "stop_scrolling": stop_scrolling,
+    "get_page_elements": get_page_elements,
 }
 
 
@@ -227,6 +229,22 @@ TOOL_DEFINITIONS.append({
     "strict": True,
 })
 
+TOOL_DEFINITIONS.append({
+    "type": "function",
+    "name": "get_page_elements",
+    "description": (
+        "Inspect the current webpage and return visible buttons and links. "
+        "Use this when the user asks what can be clicked or what options are available."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+})
+
 AGENT_INSTRUCTIONS = (
     "You are Nexa, an AI desktop agent for macOS. "
     "Perform exactly the actions requested by the user. "
@@ -236,6 +254,7 @@ AGENT_INSTRUCTIONS = (
     "If the user asks to search YouTube, only search YouTube unless they also explicitly ask to open a video. "
     "Never claim an action succeeded without a tool result."
     "If the user refers to 'this page' or 'the current page', use the read_page tool."
+    "If the user asks to open or click something based on its meaning rather than exact visible text, first use read_page to inspect the page, then use click_text with the best matching visible text."
 )
 
 
