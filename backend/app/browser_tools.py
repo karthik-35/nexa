@@ -1,6 +1,7 @@
 from pathlib import Path
 import time
 from playwright.sync_api import sync_playwright
+from app.ai import analyze_screenshot
 
 playwright = None
 context = None
@@ -220,4 +221,37 @@ def get_page_elements():
         "success": True,
         "buttons": buttons[:30],
         "links": links[:30],
+    }
+
+def take_screenshot():
+    page = get_page()
+
+    screenshot_path = "/tmp/nexa_screenshot.png"
+
+    page.screenshot(
+        path=screenshot_path,
+        full_page=False
+    )
+
+    return {
+        "success": True,
+        "path": screenshot_path,
+        "message": "Captured the current browser screen."
+    }
+
+def analyze_current_screen():
+    page = get_page()
+
+    screenshot_path = "/tmp/nexa_screenshot.png"
+
+    page.screenshot(
+        path=screenshot_path,
+        full_page=False
+    )
+
+    analysis = analyze_screenshot(screenshot_path)
+
+    return {
+        "success": True,
+        "analysis": analysis
     }

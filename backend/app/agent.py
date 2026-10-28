@@ -16,6 +16,8 @@ from app.browser_tools import (
     scroll_page,
     stop_scrolling,
     get_page_elements,
+    take_screenshot,
+    analyze_current_screen,
 )
 
 
@@ -35,6 +37,8 @@ TOOLS = {
     "scroll_page": scroll_page,
     "stop_scrolling": stop_scrolling,
     "get_page_elements": get_page_elements,
+    "take_screenshot": take_screenshot,
+    "analyze_current_screen": analyze_current_screen,
 }
 
 
@@ -245,6 +249,38 @@ TOOL_DEFINITIONS.append({
     "strict": True,
 })
 
+TOOL_DEFINITIONS.append({
+    "type": "function",
+    "name": "take_screenshot",
+    "description": (
+        "Capture a screenshot of the currently visible area of the Nexa browser. "
+        "Use this when the user asks to take or capture a screenshot."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+})
+
+TOOL_DEFINITIONS.append({
+    "type": "function",
+    "name": "analyze_current_screen",
+    "description": (
+        "Take a screenshot of the current Nexa browser and visually analyze it. "
+        "Use this when the user asks what is visible on the screen or asks Nexa to look at the screen."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+})
+
 AGENT_INSTRUCTIONS = (
     "You are Nexa, an AI desktop agent for macOS. "
     "Perform exactly the actions requested by the user. "
@@ -255,6 +291,9 @@ AGENT_INSTRUCTIONS = (
     "Never claim an action succeeded without a tool result."
     "If the user refers to 'this page' or 'the current page', use the read_page tool."
     "If the user asks to open or click something based on its meaning rather than exact visible text, first use read_page to inspect the page, then use click_text with the best matching visible text."
+    "If the user asks you to visually inspect the screen and then interact with something visible, "
+    "first use analyze_current_screen to understand the screen. "
+    "Then use the appropriate browser tool to perform the requested action. "
 )
 
 
