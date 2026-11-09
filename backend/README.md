@@ -126,6 +126,27 @@ Browser automation is powered by **Playwright** using a dedicated persistent Chr
 
 Current browser capabilities include:
 
+### Open a Website in Nexa
+
+```text
+Open YouTube
+```
+
+`open_browser_url(url)` opens HTTP/HTTPS websites in the existing Nexa Chromium
+page, using `~/.nexa/browser-profile`. Subsequent searches, reading, clicks, and
+vision actions use that same controlled browser. Opening YouTube alone navigates
+to its homepage without searching or opening a video.
+
+`open_website(url)` and `POST /tools/open-website` are separate: they launch the
+normal macOS default browser. The agent should choose this tool only for an
+explicit request such as "Open YouTube in my default browser." Nexa cannot use
+its Playwright tools to control that browser.
+
+Both URL tools accept only HTTP/HTTPS addresses with a hostname, reject embedded
+credentials and malformed URLs, and default bare domains such as `youtube.com`
+to HTTPS. Include the scheme for local services with ports, such as
+`http://localhost:8000`. This is URL validation, not a website trust allowlist.
+
 ### YouTube Search
 
 ```text
@@ -194,7 +215,10 @@ Scrolling continues smoothly until it is explicitly stopped or interrupted.
 
 ### Inspect Page Elements
 
-Nexa can inspect visible buttons and links on the current webpage.
+Nexa can inspect visible buttons and links, including icon buttons identified by
+ARIA labels, associated labels, or titles. Observations include an `observation_id`
+and element IDs. `click_element` uses the observed DOM element with Playwright's
+visibility and actionability checks; the model cannot supply an arbitrary selector.
 
 ---
 
@@ -233,19 +257,35 @@ Examples include:
 - Image buttons
 - Graphical controls
 
-For these cases, Nexa is being developed to use:
+For these cases, Nexa uses:
 
 ```text
-Screenshot
+Screenshot + DOM observation
     ↓
 Vision Analysis
     ↓
-Target Coordinates
+Observed DOM target ID (preferred) or recorded vision coordinates
     ↓
-Coordinate Click
+Click → inspect resulting page/dialog state
 ```
 
-Coordinate-based clicking is currently experimental because screenshot coordinates and browser viewport coordinates must be mapped reliably across different screen sizes and display scaling settings.
+Screenshots use `scale="css"`: one image pixel equals one viewport CSS pixel,
+including on Retina displays. Nexa checks the PNG dimensions against the viewport
+and tells the vision model the original image dimensions. Vision returns structured
+page, summary, and element data; visual descriptions are never assumed to be visible text.
+
+`click_coordinates(x, y, observation_id)` accepts only exact fallback coordinates
+returned by the latest vision observation. Observations expire after two minutes
+and are invalidated by actions or new observations. Page, viewport, and scroll
+changes reject stale targets. Coordinate fallback also requires an unchanged
+screenshot; animated/video pages may therefore require DOM targeting.
+
+Coordinate localization remains experimental: these checks prevent invented or
+stale agent coordinates, but cannot guarantee that the vision model localized an
+unlabeled target correctly. A successful click dispatch is **not** task completion.
+Click tools return `action_executed` separately from `verification`, including new
+dialogs and the resulting page text. The agent must compare that evidence with the
+requested outcome and report uncertainty when it cannot verify it.
 
 Text and DOM-based interaction remain the preferred method whenever possible.
 
@@ -416,6 +456,7 @@ Contains browser automation and browser observation tools.
 Current tools include:
 
 ```text
+open_browser_url
 search_youtube
 open_first_youtube_result
 go_back
@@ -430,6 +471,7 @@ get_page_elements
 take_screenshot
 analyze_current_screen
 click_coordinates
+click_element
 ```
 
 ---
@@ -507,6 +549,12 @@ From the `backend` directory:
 source .venv/bin/activate
 uvicorn app.main:app --reload
 ```
+
+Agent requests run serially on a dedicated worker so synchronous Playwright stays
+on its owning thread and observe/action sequences cannot interleave. Run a single
+Uvicorn worker with the dedicated browser profile. OpenAI initialization is lazy;
+the backend loads `backend/.env` independently of the working directory, while
+health and browser-only checks work without an API key.
 
 The API will run locally at:
 
@@ -595,9 +643,35 @@ Current limitations include:
 - Browser input detection currently depends on webpage structure.
 - Authentication-heavy websites may require official APIs or OAuth.
 - Sensitive actions do not yet have a complete confirmation system.
-- Browser automation error handling is still being improved.
+- Expected Playwright failures return structured tool errors; broader recovery is still being improved.
+- DOM target discovery currently covers the main frame and common interactive controls; iframe targeting is not yet implemented.
 
 Nexa does not attempt to bypass CAPTCHA or website security mechanisms.
+
+### Browser reliability checks
+
+Run from `backend`:
+
+```bash
+.venv/bin/python -m pytest -q
+```
+
+The suite uses local HTML in temporary headless Chromium contexts and mocked
+OpenAI responses. It checks DPR 2 screenshots, real DOM/canvas activation,
+stale-coordinate rejection, timeout recovery, existing browser controls,
+the application allowlist, and serialized agent requests. Chromium must already
+be installed; the suite makes no OpenAI API calls.
+
+For the live model check, with YouTube open in Nexa's browser, send `/agent`:
+
+```text
+Look at the current screen and click the microphone icon next to the search bar.
+```
+
+Verify the voice-search dialog actually opens. A "Waiting for permission" dialog
+confirms the button activated; granting microphone permission is not needed for
+this test. Check the returned `actions` for observation, DOM targeting, and dialog
+evidence. Do not infer completion from `success: true` alone.
 
 ---
 

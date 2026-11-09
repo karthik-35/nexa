@@ -1,6 +1,7 @@
 import subprocess
 
 import os
+from app.urls import normalize_web_url
 
 ALLOWED_APPS = {
     "chrome": "Google Chrome",
@@ -67,15 +68,15 @@ def open_app(app_name: str):
 
 def open_website(url: str):
     """
-    Opens a website in the default browser.
+    Opens a website in the user's normal macOS default browser, outside Nexa.
 
     Args:
         url: Website address, such as youtube.com.
     """
-    url = url.strip()
-
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
+    try:
+        url = normalize_web_url(url)
+    except ValueError as error:
+        return {"success": False, "error": "invalid_url", "message": str(error)}
 
     subprocess.run(
         ["open", url],
@@ -84,5 +85,7 @@ def open_website(url: str):
 
     return {
         "success": True,
-        "message": f"Opened {url}."
+        "browser": "default",
+        "url": url,
+        "message": f"Opened {url} in the macOS default browser. Nexa does not control that browser."
     }
