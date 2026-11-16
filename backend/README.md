@@ -662,16 +662,138 @@ stale-coordinate rejection, timeout recovery, existing browser controls,
 the application allowlist, and serialized agent requests. Chromium must already
 be installed; the suite makes no OpenAI API calls.
 
-For the live model check, with YouTube open in Nexa's browser, send `/agent`:
+For one harmless live model check, send this through `POST /agent` (the `message`
+query parameter):
 
 ```text
-Look at the current screen and click the microphone icon next to the search bar.
+Open YouTube, inspect the page, and type "Nexa verification test" into the Search box without submitting it. Verify that the box contains that exact text.
 ```
 
-Verify the voice-search dialog actually opens. A "Waiting for permission" dialog
-confirms the button activated; granting microphone permission is not needed for
-this test. Check the returned `actions` for observation, DOM targeting, and dialog
-evidence. Do not infer completion from `success: true` alone.
+The search box should visibly contain that text and the page should stay on YouTube
+without opening search results. In `actions`, expect navigation, `get_page_elements`,
+`type_text`, and optional `verify_outcome` calls. The typing result should include
+`action_executed: true`, a changed input value in `verification.after.controls`,
+and `verification.outcome_verified: true` with cited evidence. The final response
+should have `success: true` and `outcome_verified: true`. A dispatch alone does not
+pass this test. This test requires no login, microphone permission, or submission.
+
+### Action verification and recovery
+
+Browser action `success` describes execution, not completion of the user's task.
+Actions return `action_executed` and `verification` separately. Semantic snapshots
+include URL, title, document identity, visible text, dialogs, menus, input values,
+selected/expanded/checked states, and scroll state. Password values are excluded.
+The post-action check polls for up to two seconds when no change is detected.
+`observed_change` is evidence only; `unverified` means no useful change was captured
+or observation failed.
+
+For outcomes without a deterministic expectation, the agent compares the evidence
+with the request and calls the structured,
+allowlisted `verify_outcome(field, evidence)` tool. The backend checks that the cited
+fact is newly present in the recorded evidence: an exact scalar, full text line,
+or changed control record. Dialog removal is also supported. A successful
+`open_browser_url` prerequisite can also be verified by a subsequent fresh
+observation confirming the resulting URL. That completes the navigation step
+and allows the next requested action, such as typing, to proceed. Neither an
+empty `about:blank` observation nor an HTTP error verifies requested navigation.
+`outcome_verified` is set only with supporting evidence. Semantic relevance to the user's intent remains a model
+judgement; grounding checks do not prove causation or complete natural-language
+understanding. Unsupported final success claims are replaced with an explicit
+unverified result. A later successful read cannot conceal an unresolved action.
+
+
+`type_text` supplies a browser-generated `expected_outcome` identifying the actual
+input node, its document, and the exact requested value. Controls have opaque
+`control_id` identities stored outside the DOM; these are for verification, not
+new actionable element IDs. Post-action captures and fresh observations carry
+monotonic timestamps, and separately requested observations retain their IDs.
+Before continuing or finishing, the workflow checks the newest associated evidence:
+the same node and document must be present, the capture must postdate the action,
+and the control's value must exactly equal the requested text. Partial, case-folded,
+trimmed, or different-control matches are rejected. No Enter key or form submission
+is needed or performed by this verification.
+
+A verified predicate clears the pending action, records `outcome_evidence`, and sets
+both the action's verification flag and final `outcome_verified`. This transition
+does not require another model call to `verify_outcome`; that tool applies the same
+exact predicate if called explicitly. A model citation to an unrelated changed fact
+cannot override a wrong input value. Conversely, a malformed optional verification
+call cannot negate an otherwise proven outcome; substantive tool failures still
+produce failure. Later fresh observations replace earlier
+snapshots while the action is pending, so a newer wrong value cannot be hidden by
+an earlier correct snapshot. Stale pre-action observations cannot supply proof.
+The generic node/property/equality evaluator is reusable for other declared control
+states; only typing currently emits these expectations automatically. Menu and
+other semantic click outcomes retain the existing evidence-based verification.
+
+For delayed UI changes, a fresh `get_page_elements` or `analyze_current_screen`
+can update the evidence without clicking again. To recover, the agent must obtain
+a new observation, reevaluate the targets, and choose a valid alternative within
+the original request. The backend rejects recovery without that observation,
+old IDs, repeated named targets (including switching from DOM to text),
+unobserved recovery text, and unrelated action families. Uncertain Enter
+submissions cannot be repeated. Existing guarded vision fallback remains available.
+Sensitive-action restrictions continue to apply; the model is instructed to recover
+only harmless reversible actions and never repeat uncertain sensitive operations.
+
+Limits are **three attempts per unresolved action** (initial plus two recoveries)
+and **twelve total tool calls per request**, including inspection and verification.
+Rejected calls also consume the request budget. Tool calls execute one at a time.
+These limits are deterministic; recovery target selection remains agent-driven.
+Proven pre-execution infrastructure failures have a separate limit of **two returned
+failures per request** and do not consume semantic attempts or mark a target tried.
+They still consume tool calls. Explicit URL navigation has at most **one internal
+repair/retry** per call. An error during an interaction with unknown dispatch state
+remains unresolved and cannot trigger blind replay. Stale-observation rejections
+before dispatch similarly require fresh observation without marking the control
+as an executed attempt.
+
+Observations retain the existing two-minute expiry, page/document/viewport/scroll
+checks and per-action invalidation. A canonical DOM fingerprint plus input values
+now also rejects page-content changes; target identity, connection, and geometry
+are checked before DOM clicks. Coordinates still require an exact match to fresh
+vision output and an unchanged screenshot. DOM fingerprints are conservative:
+background updates may force reinspection. Snapshots are bounded (5,000 text
+characters, 100 controls, 30 dialogs/menus), so some outcomes remain unverifiable.
+Already-satisfied semantic outcomes without a new fact may still be reported
+unverified. Typing can verify an already-correct value with fresh evidence.
+Replaced input nodes conservatively require reinspection; matching text in a
+replacement node alone is not proof about the original target.
+Canvas-only effects, slow transitions, iframes, and shadow DOM may require richer
+observation in a later milestone. No live OpenAI/YouTube result is asserted by the
+automated suite; it uses scripted model orchestration and local Chromium pages.
+
+### Chromium lifecycle
+
+The browser layer checks the context's close/disconnection events, browser
+connection and context membership, page/context membership, `page.is_closed()`,
+and a live Playwright round-trip probe. A cached object being non-null (or even
+reporting connected after a stopped driver) is insufficient. Closed pages can
+reacquire an existing live page in the owned context or create a new page. Dead
+contexts/drivers are disposed before reopening the same persistent profile.
+All operations and shutdown remain on the serialized browser owner thread.
+
+`close_browser()` detaches cached references before cleanup and attempts both
+context closure and driver shutdown. Closed-target cleanup errors are tolerated.
+Unexpected Playwright cleanup failures quarantine the old resources and block a
+replacement launch until cleanup succeeds. Chromium's existing persistent-profile
+lock remains intact; Nexa never deletes it, launches an alternate profile to evade
+it, attaches to unrelated Chrome windows, or kills unrelated processes.
+
+Explicit navigation captures its before/after evidence on the actual acquired page,
+and can repair/retry once if that target dies. Results include `browser_recovery`
+events when initialization/reacquisition/retry occurred. Exhausted acquisition
+returns `browser_unavailable`, `failure_kind: infrastructure`, and
+`action_executed: false`; unknown mid-action dispatch is represented by null instead.
+A later successful inspection cannot conceal an unresolved infrastructure failure.
+
+Normal backend reload uses the existing lifespan shutdown to close Chromium on
+its owner thread. An abrupt process termination may leave an orphan holding the
+profile lock: Nexa reports failure rather than creating a duplicate owner or
+pretending that an unrelated visible window is controllable. Close the orphaned
+Nexa Chromium window before retrying in that case. Automated lifecycle tests use
+headless persistent Chromium with temporary profiles and intercepted local HTML;
+they never use the personal Nexa profile or make live YouTube/OpenAI requests.
 
 ---
 

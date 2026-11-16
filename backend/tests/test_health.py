@@ -47,3 +47,18 @@ def test_agent_browser_timeout_returns_structured_result_not_http_500(monkeypatc
     assert result.status_code == 200
     assert result.json()['success'] is False
     assert result.json()['actions'][0]['result']['success'] is False
+
+
+def test_reload_lifespans_cleanup_on_same_owner_thread_as_browser_requests(monkeypatch):
+    for _ in range(2):
+        threads = {}
+        def run(message):
+            threads['request'] = threading.get_ident()
+            return {'success': True}
+        def close():
+            threads['cleanup'] = threading.get_ident()
+        monkeypatch.setattr(main, 'run_agent', run)
+        monkeypatch.setattr(main, 'close_browser', close)
+        with TestClient(main.app) as client:
+            assert client.post('/agent', params={'message': 'inspect'}).status_code == 200
+        assert threads['request'] == threads['cleanup']
