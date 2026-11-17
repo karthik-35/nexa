@@ -3,6 +3,7 @@ from functools import wraps
 from hashlib import sha256
 import tempfile
 import time
+from urllib.parse import urljoin, urlsplit, parse_qs
 from playwright.sync_api import sync_playwright, Error as PlaywrightError, TimeoutError as PlaywrightTimeout
 from app.ai import analyze_screenshot, png_dimensions
 from app.urls import normalize_web_url
@@ -114,11 +115,21 @@ def verified_action(function):
                 raise BrowserUnavailable('Browser target closed before the action executed. Retry after browser reacquisition.') from error
             raise
         result = function(*args, **kwargs)
-        result['action_executed'] = result.get('success', False) or result.get('error') == 'http_error'
-        if result['action_executed']:
+        result.setdefault('action_executed', result.get('success', False) or result.get('error') == 'http_error')
+        if result['action_executed'] or result.get('already_satisfied'):
             result['verification'] = click_evidence(current, before)
         return result
     return action
+
+
+def navigation_expectation(current, href):
+    if not href:
+        return None
+    try:
+        destination = normalize_web_url(urljoin(current.url, href))
+    except ValueError:
+        return None
+    return {'kind': 'url', 'equals': destination, 'created_at': time.monotonic()}
 
 
 @browser_tool
@@ -261,6 +272,7 @@ def open_browser_url(url: str):
         try:
             current = get_page()
             before = visible_state(current)
+            navigation_started = time.monotonic()
             dispatch_started = True
             response = current.goto(url, wait_until="domcontentloaded")
         except PlaywrightError as error:
@@ -281,6 +293,7 @@ def open_browser_url(url: str):
                     "url": current.url, "status": response.status,
                     "message": "The website returned an HTTP error in Nexa Chromium."}
         return {"success": True, "browser": "nexa", "url": current.url,
+                "expected_outcome": {"kind": "url", "equals": current.url, "created_at": navigation_started},
                 "action_executed": True, "verification": verification,
                 "message": "Opened the website in Nexa Chromium."}
 
@@ -291,16 +304,25 @@ def search_youtube(query: str):
     clear_observation()
     page = get_page()
 
-    page.goto("https://www.youtube.com")
+    expected = {"kind": "query", "equals": query, "created_at": time.monotonic()}
+    if urlsplit(page.url).hostname not in {'youtube.com', 'www.youtube.com'} or not page.locator('input[name="search_query"]').count():
+        page.goto("https://www.youtube.com")
 
     search_box = page.locator('input[name="search_query"]')
-    search_box.fill(query)
+    if (urlsplit(page.url).path == '/results' and parse_qs(urlsplit(page.url).query).get('search_query') == [query]
+            and search_box.input_value() == query):
+        return {"success": True, "action_executed": False, "already_satisfied": True,
+                "expected_outcome": expected, "message": "The requested search results are already displayed."}
+    if search_box.input_value() != query:
+        search_box.fill(query)
+    search_box.focus()
     page.keyboard.press("Enter")
 
     page.wait_for_url("**/results?search_query=**")
 
     return {
         "success": True,
+        "expected_outcome": expected,
         "message": f"Searched YouTube for '{query}'."
     }
 
@@ -312,12 +334,14 @@ def open_first_youtube_result():
 
     first_video = page.locator("ytd-video-renderer a#video-title").first
 
+    expected = navigation_expectation(page, first_video.get_attribute('href'))
     first_video.click()
 
     page.wait_for_load_state("domcontentloaded")
 
     return {
         "success": True,
+        "expected_outcome": expected,
         "message": "Opened the first YouTube search result."
     }
 
@@ -326,10 +350,12 @@ def open_first_youtube_result():
 def go_back():
     clear_observation()
     page = get_page()
+    started = time.monotonic()
     page.go_back()
 
     return {
         "success": True,
+        "expected_outcome": {"kind": "url", "equals": page.url, "created_at": started},
         "message": "Went back to the previous page."
     }
 
@@ -338,10 +364,12 @@ def go_back():
 def refresh_page():
     clear_observation()
     page = get_page()
+    started = time.monotonic()
     page.reload()
 
     return {
         "success": True,
+        "expected_outcome": {"kind": "reload", "equals": page.url, "created_at": started},
         "message": "Refreshed the current page."
     }
 
@@ -363,10 +391,12 @@ def click_text(text: str):
     page = get_page()
 
     element = page.get_by_text(text, exact=True).first
+    expected = navigation_expectation(page, element.evaluate("el => el.closest('a[href]')?.href || null"))
     element.click()
 
     return {
         "success": True,
+        "expected_outcome": expected,
         "message": f"Clicked '{text}'."
     }
 
@@ -381,12 +411,16 @@ def type_text(field: str, text: str):
     expected = {"kind": "control_property", "control_id": target['control_id'],
                 "property": "value", "equals": text,
                 "document": page.evaluate('performance.timeOrigin'), "created_at": time.monotonic()}
-    input_box.fill(text)
+    already = input_box.input_value() == text
+    if already:
+        input_box.focus()  # A subsequent requested Enter still targets this input.
+    else:
+        input_box.fill(text)
 
-    return {
+    return {"action_executed": not already, "already_satisfied": already,
         "success": True,
         "expected_outcome": expected,
-        "message": f"Typed '{text}' into '{field}'."
+        "message": f"The field already contains the requested text; focused '{field}'." if already else f"Typed '{text}' into '{field}'."
     }
 
 @browser_tool
@@ -394,10 +428,12 @@ def type_text(field: str, text: str):
 def press_enter():
     clear_observation()
     page = get_page()
+    focused = page.evaluate('() => document.activeElement?.value ?? null')
+    expected = {'kind': 'query', 'equals': focused, 'created_at': time.monotonic()} if isinstance(focused, str) and focused else None
     page.keyboard.press("Enter")
 
     return {
-        "success": True,
+        "success": True, "expected_outcome": expected,
         "message": "Pressed Enter."
     }
 
@@ -517,10 +553,11 @@ def click_element(observation_id: str, element_id: str):
         clear_observation()
         return {"success": False, "action_executed": False, "error": "stale_observation", "message": "Target identity changed. Inspect again."}
     before = visible_state(page)
+    expected = navigation_expectation(page, details.get("href"))
     try:
         handle.click(timeout=5000)
         return {"success": True, "action_executed": True, "method": "dom",
-                "target": details, "verification": click_evidence(page, before)}
+                "target": details, "expected_outcome": expected, "verification": click_evidence(page, before)}
     finally:
         clear_observation()
 

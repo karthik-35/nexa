@@ -311,6 +311,7 @@ def test_agent_recovers_from_noop_with_real_fresh_dom_and_verifies_dialog(page, 
         assert result.get('outcome_verified')
         return call()
     create = Mock(side_effect=decide)
+    monkeypatch.setattr(agent, 'plan_task', lambda client, message: None)
     monkeypatch.setattr(agent, 'get_client', lambda: SimpleNamespace(responses=SimpleNamespace(create=create)))
     result = agent.run_agent('Open the Settings menu')
     assert result['success'] and result['outcome_verified']

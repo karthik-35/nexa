@@ -1,6 +1,7 @@
 """Per-request verification and bounded recovery. No browser ownership or execution here."""
 import json
 from app.browser_observation import state_evidence
+from app.urls import destination_matches
 
 BROWSER_ACTIONS = frozenset({
     'open_browser_url', 'search_youtube', 'open_first_youtube_result', 'go_back',
@@ -8,8 +9,9 @@ BROWSER_ACTIONS = frozenset({
     'press_enter', 'scroll_page', 'stop_scrolling',
 })
 CLICK_ACTIONS = frozenset({'click_text', 'click_element', 'click_coordinates'})
+TARGET_ACTIONS = CLICK_ACTIONS | {'open_first_youtube_result'}
 OBSERVATIONS = frozenset({'get_page_elements', 'analyze_current_screen'})
-MAX_TOOL_STEPS = 12
+MAX_TOOL_STEPS = 36
 MAX_ATTEMPTS = 3
 MAX_INFRASTRUCTURE_FAILURES = 2
 
@@ -53,23 +55,38 @@ class ActionWorkflow:
         if not self.pending:
             return False
         result = self.pending['result']
-        expected = result.get('expected_outcome', {})
+        expected = (result.get('expected_outcome') or {})
         verification = result.get('verification', {})
         after = verification.get('after', {})
-        if not (result.get('success') is True and result.get('action_executed') is True
-                and expected.get('kind') == 'control_property'
-                and verification.get('after_observed_at', 0) > expected.get('created_at', float('inf'))
-                and after.get('document') == expected.get('document')
-                and expected.get('control_id')):
+        if not (result.get('success') is True
+                and (result.get('action_executed') is True or result.get('already_satisfied'))
+                and verification.get('after_observed_at', 0) > expected.get('created_at', float('inf'))):
             return False
-        matches = [control for control in after.get('controls', [])
-                   if control.get('control_id') == expected['control_id']]
-        if len(matches) != 1 or matches[0].get(expected['property']) != expected['equals']:
+        evidence = None
+        kind = expected.get('kind')
+        before = verification.get('before', {})
+        if kind == 'control_property' and after.get('document') == expected.get('document') and expected.get('control_id'):
+            matches = [control for control in after.get('controls', []) if control.get('control_id') == expected['control_id']]
+            if len(matches) == 1 and matches[0].get(expected['property']) == expected['equals']:
+                evidence = {'field': 'controls', 'control_id': expected['control_id'],
+                            'property': expected['property'], 'value': matches[0][expected['property']]}
+        elif kind in {'url', 'reload', 'query'}:
+            from urllib.parse import urlsplit, parse_qs
+            navigated = after.get('url') != before.get('url') or after.get('document') != before.get('document')
+            if kind == 'query':
+                matches = any(expected['equals'] in values for values in parse_qs(urlsplit(after.get('url', '')).query).values())
+            else:
+                matches = destination_matches(expected['equals'], after.get('url', ''))
+            if kind == 'reload':
+                navigated = after.get('document') != before.get('document')
+            if matches and (navigated or result.get('already_satisfied')):
+                evidence = {'field': 'url', 'value': after['url']}
+                if kind in {'url', 'reload'}:
+                    evidence.update(expected_url=expected['equals'], match='destination_equivalent')
+        if evidence is None:
             return False
         verification.update(outcome_verified=True, outcome_evidence={
-            'field': 'controls', 'control_id': expected['control_id'],
-            'property': expected['property'], 'value': matches[0][expected['property']],
-            'source': 'post_action_observation',
+            **evidence, 'source': 'post_action_observation',
             'observation_id': verification.get('after_observation_id'),
         })
         self.pending = None
@@ -87,7 +104,8 @@ class ActionWorkflow:
         observed_url = self.observation.get('state', {}).get('url')
         after = result.get('verification', {}).get('after', {})
         if (result.get('success') is True and result.get('action_executed') is True
-                and observed_url and observed_url == result.get('url') == after.get('url')):
+                and observed_url and destination_matches(result.get('url', ''), observed_url)
+                and destination_matches(after.get('url', ''), observed_url)):
             result['verification'].update(outcome_verified=True, outcome_evidence={
                 'field': 'url', 'evidence': observed_url, 'source': 'fresh_observation'})
             self.pending = None
@@ -122,7 +140,7 @@ class ActionWorkflow:
         if name == 'press_enter':
             return 'An uncertain submission cannot be safely repeated. Inspect the result or stop.'
         old_name = self.pending['tool']
-        if not (name in CLICK_ACTIONS and old_name in CLICK_ACTIONS) and name != old_name:
+        if not (name in TARGET_ACTIONS and old_name in TARGET_ACTIONS) and name != old_name:
             return 'Unverified action: inspect and verify before starting a different action.'
         if self.fingerprint(name, arguments) in self.tried:
             return 'This target was already attempted. Inspect and choose a valid alternative; do not repeat it.'
@@ -153,7 +171,7 @@ class ActionWorkflow:
                 # Update only the pending action, and preserve freshness provenance.
                 if self.pending and result.get('state'):
                     pending_result = self.pending['result']
-                    expected = pending_result.get('expected_outcome', {})
+                    expected = (pending_result.get('expected_outcome') or {})
                     if result.get('browser_recovery') and not expected:
                         return  # Semantic changes in a replacement session prove nothing about the old action.
                     observed_at = result.get('observed_at', 0)
@@ -185,8 +203,14 @@ class ActionWorkflow:
                 return {'success': True, 'outcome_verified': True,
                         'evidence': result['verification']['outcome_evidence'],
                         'message': 'The observed target state exactly matches the requested outcome.'}
-            return {'success': False, 'outcome_verified': False,
-                    'message': 'Fresh evidence does not match the requested target state exactly. Inspect again or report unverified.'}
+            if result['expected_outcome'].get('kind') in {'url', 'reload'}:
+                actual = result.get('verification', {}).get('after', {}).get('url', '')
+                if not destination_matches(result['expected_outcome']['equals'], actual):
+                    return {'success': False, 'outcome_verified': False,
+                            'message': 'Observed destination does not match the expected resource identity. Inspect again or report unverified.'}
+            if result['expected_outcome'].get('kind') == 'control_property':
+                return {'success': False, 'outcome_verified': False,
+                        'message': 'Fresh evidence does not match the requested target state exactly. Inspect again or report unverified.'}
         verification = result.get('verification', {})
         before, after = verification.get('before', {}), verification.get('after', {})
         if field == 'removed_dialogs':
@@ -237,7 +261,7 @@ class ActionWorkflow:
             substantive = [action for action in actions if action['tool'] != 'verify_outcome']
             success = bool(substantive) and substantive[-1]['result'].get('success', False)
         if success and exact_outcome_verified:
-            message = 'Verified that the target control exactly matches the requested state.'
+            message = 'Verified the requested browser state.'
         return {'success': success, 'actions': actions,
                 'message': message if success else 'A tool failed; the requested outcome could not be verified.',
                 'outcome_verified': self.verified if success else False}

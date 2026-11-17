@@ -19,7 +19,7 @@ ELEMENT_DETAILS = """el => {
         text || el.getAttribute('title') || el.getAttribute('placeholder') || '';
     const role = el.getAttribute('role') ||
         ({BUTTON: 'button', A: 'link', INPUT: 'textbox', TEXTAREA: 'textbox', SELECT: 'combobox'}[el.tagName]) || 'control';
-    return {role, name: name.slice(0, 200), text: text.slice(0, 200),
+    return {role, name: name.slice(0, 200), text: text.slice(0, 200), href: el.href || null,
         box: {x: box.x, y: box.y, width: box.width, height: box.height}};
 }"""
 

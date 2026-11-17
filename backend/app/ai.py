@@ -3,10 +3,11 @@ import json
 from functools import lru_cache
 from pathlib import Path
 import struct
+from typing import Literal
 
 from dotenv import load_dotenv
 from openai import OpenAI
-from pydantic import BaseModel, ConfigDict, StrictInt
+from pydantic import BaseModel, ConfigDict, StrictInt, Field, model_validator
 
 
 @lru_cache(maxsize=1)
@@ -78,3 +79,54 @@ def analyze_screenshot(image_path: str, *, dom_elements: list[dict] | None = Non
     if response.status != 'completed' or response.output_parsed is None:
         raise ValueError('Vision did not return a complete screen observation. No click is authorized.')
     return response.output_parsed.model_dump()
+
+
+# Intent only: no selectors, element IDs, coordinates, or predicted page states.
+class TaskStep(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    kind: Literal['navigate', 'type', 'submit', 'activate', 'back', 'refresh', 'scroll', 'stop', 'observe', 'external']
+    description: str
+    value: str | None
+
+    @model_validator(mode='after')
+    def require_literal_targets(self):
+        if self.kind in {'navigate', 'type'} and self.value is None:
+            raise ValueError('Navigation and typing steps need a literal requested value.')
+        if self.kind == 'navigate':
+            from app.urls import normalize_web_url
+            self.value = normalize_web_url(self.value)
+        return self
+
+
+class TaskPlan(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    steps: list[TaskStep] = Field(max_length=10)
+
+
+def plan_task(client, message: str) -> TaskPlan:
+    response = client.responses.parse(
+        model='gpt-4.1-mini', text_format=TaskPlan,
+        instructions=(
+            'Extract ONLY the ordered outcomes explicitly requested by the user. This is an intent ledger, '
+            'not an execution script. Never invent selectors, future IDs, coordinates, results or URLs '
+            'for unknown destinations. Use navigate with the requested website URL; type with exact '
+            'literal text; submit with the exact search query (or null for a generic explicit Enter); '
+            'activate for opening a result/menu/link; back; refresh; scroll; stop for stopping scrolling; observe for reading/inspection; '
+            'external for approved non-browser actions. Use value null for activate, back, refresh, scroll, stop, '
+            'observe and external. Split search into type then submit. When a website is named, include '
+            'navigate as a conditional prerequisite that a fresh observation may already satisfy. Do not collapse or omit any '
+            'requested later action, repeated search, or return/back step. Keep explicit inspection as '
+            'an observe step. Include navigation when explicitly requested; implicit prerequisites '
+            'will be chosen interactively if needed. Do not add submission when asked only to type. '
+            'Use short user-facing descriptions. For example open a website, search, open a result, '
+            'go back has five steps: navigate, type, submit, activate, back. Maximum ten outcomes; '
+            'do not silently truncate longer tasks. For a purely conversational request use no steps. '
+            'Preserve explicit requests for the personal/default browser as external, not navigate. '
+            'No permissions, authentication, CAPTCHA bypass or extra sensitive actions are authorized '
+            'by this ledger. The original user request remains authoritative.'
+        ),
+        input=message,
+    )
+    if response.status != 'completed' or response.output_parsed is None:
+        raise ValueError('Could not determine a complete task; no actions were executed.')
+    return response.output_parsed

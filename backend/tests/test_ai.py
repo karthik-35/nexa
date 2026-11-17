@@ -38,3 +38,33 @@ def test_vision_schema_and_original_dimensions(tmp_path, monkeypatch):
 def test_invalid_png_rejected():
     with pytest.raises(ValueError):
         ai.png_dimensions(b'not a png')
+
+
+def test_task_plan_extracts_ordered_intent_without_executable_targets():
+    plan = ai.TaskPlan(steps=[ai.TaskStep(kind='navigate', description='Open site', value='example.com'),
+                              ai.TaskStep(kind='type', description='Enter exact query', value='FastAPI tutorial'),
+                              ai.TaskStep(kind='submit', description='Search', value='FastAPI tutorial'),
+                              ai.TaskStep(kind='activate', description='Open first result', value=None),
+                              ai.TaskStep(kind='back', description='Return to results', value=None)])
+    parse = Mock(return_value=SimpleNamespace(status='completed', output_parsed=plan))
+    client = SimpleNamespace(responses=SimpleNamespace(parse=parse))
+    message = 'Open example.com, search FastAPI tutorial, open first result, go back'
+    assert ai.plan_task(client, message) is plan
+    request = parse.call_args.kwargs
+    assert request['input'] == message and request['text_format'] is ai.TaskPlan
+    assert plan.steps[0].value == 'https://example.com/'
+    assert set(ai.TaskStep.model_json_schema()['properties']) == {'kind', 'description', 'value'}
+    parse.return_value.output_parsed = None
+    with pytest.raises(ValueError, match='no actions were executed'):
+        ai.plan_task(client, message)
+
+
+@pytest.mark.parametrize('steps', [
+    [{'kind': 'type', 'description': 'Type', 'value': None}],
+    [{'kind': 'navigate', 'description': 'Open', 'value': 'javascript:alert(1)'}],
+    [{'kind': 'shell', 'description': 'Run', 'value': 'anything'}],
+    [{'kind': 'back', 'description': 'Back', 'value': None}] * 11,
+])
+def test_invalid_or_unbounded_task_plans_are_rejected(steps):
+    with pytest.raises(ValueError):
+        ai.TaskPlan(steps=steps)

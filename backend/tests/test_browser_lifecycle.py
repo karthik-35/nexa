@@ -172,6 +172,7 @@ def test_full_agent_open_observe_type_observe_verify_with_dead_session(session, 
         if explicit_verification != 'invalid':
             assert result.get('outcome_verified'), result
         return call()
+    monkeypatch.setattr(agent, 'plan_task', lambda client, message: None)
     monkeypatch.setattr(agent, 'get_client', lambda: SimpleNamespace(responses=SimpleNamespace(create=Mock(side_effect=decide))))
     result = agent.run_agent('Open YouTube, inspect and type Nexa verification test without submitting, then verify.')
     assert result['success'] and result['outcome_verified']

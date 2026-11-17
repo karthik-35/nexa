@@ -39,6 +39,7 @@ def test_agent_browser_timeout_returns_structured_result_not_http_500(monkeypatc
                                 arguments='{"text":"missing"}', call_id='click')
     responses = [SimpleNamespace(id='one', output=[tool_call], output_text=''),
                  SimpleNamespace(id='two', output=[], output_text='Could not locate target.')]
+    monkeypatch.setattr(agent, 'plan_task', lambda client, message: None)
     monkeypatch.setattr(agent, 'get_client', lambda: SimpleNamespace(
         responses=SimpleNamespace(create=Mock(side_effect=responses))))
     monkeypatch.setitem(agent.TOOLS, 'click_text', Mock(side_effect=TimeoutError('Target not found')))

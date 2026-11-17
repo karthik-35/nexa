@@ -662,20 +662,87 @@ stale-coordinate rejection, timeout recovery, existing browser controls,
 the application allowlist, and serialized agent requests. Chromium must already
 be installed; the suite makes no OpenAI API calls.
 
-For one harmless live model check, send this through `POST /agent` (the `message`
-query parameter):
+For one harmless multi-step live model check, send this through `POST /agent`
+(the `message` query parameter):
 
 ```text
-Open YouTube, inspect the page, and type "Nexa verification test" into the Search box without submitting it. Verify that the box contains that exact text.
+Open YouTube, search for "FastAPI tutorial", open the first result, then go back to the search results.
 ```
 
-The search box should visibly contain that text and the page should stay on YouTube
-without opening search results. In `actions`, expect navigation, `get_page_elements`,
-`type_text`, and optional `verify_outcome` calls. The typing result should include
-`action_executed: true`, a changed input value in `verification.after.controls`,
-and `verification.outcome_verified: true` with cited evidence. The final response
-should have `success: true` and `outcome_verified: true`. A dispatch alone does not
-pass this test. This test requires no login, microphone permission, or submission.
+Watch Nexa display the search results, open a video page, then return to the results
+for the same exact query. If YouTube is already open, an observed prerequisite can
+be marked already satisfied. No login, microphone permission, or destructive action
+is needed. A website security/consent challenge must be reported rather than bypassed.
+
+The response must have `success: true`, `outcome_verified: true`, and
+`task.final_outcome_verified: true`. `task.work_remaining` must be false and
+`task.current_step` null. The completed goals normally contain navigate, type,
+submit, activate, and back (search is two primitive outcomes). Each has an evidence
+reference into `actions`; `task.verified_actions` records the actual verified tools.
+Look for the exact input value, the query in the results URL, the observed result
+link's destination, and the back action restoring the earlier results URL. Specialized
+search/result tools remain usable, so the precise tool sequence can vary.
+
+### Multi-step browser tasks
+
+Each `/agent` request first extracts a bounded, structured ledger of requested
+outcomes from the original message. It contains descriptions, kinds, and literal
+values, never selectors, future element IDs, coordinates, or predicted results.
+An explicit inspection remains its own goal, and a named website can be an
+already-satisfied navigation prerequisite. No page content participates in intent
+extraction. This adds one model request; incomplete/invalid extraction executes no
+actions. The original user request and existing safety rules remain authoritative.
+
+`task_progress.py` tracks the current goal, completed goals, verified action
+references, current-step attempts, required fresh observation, and observed URL
+history. The model sees progress after each tool result and chooses the next tool
+from current evidence. The ledger never dispatches tools. Only verified actions
+of the appropriate kind advance it: entering text cannot satisfy a search submission,
+and a search on another website cannot satisfy a website-scoped query. A combined
+search tool may cover navigation, typing, and submission when its observed state
+proves all three. New targets are selected only after the new page exists.
+
+The action workflow remains responsible for pending actions, exact input predicates,
+stale observations, browser infrastructure classification, and bounded recovery.
+Navigation/link destination, query URL values, reload document identity, and back
+navigation have deterministic evidence checks where possible. Menus and SPA-specific
+outcomes can still require semantic verification; unexplained resource/host redirects
+remain unverified rather than overriding known destination identity. Back steps are
+checked against the previously observed URL history. Once a prerequisite is verified,
+it clears the pending action and the next requested goal can proceed.
+
+After state-changing navigation, submission, result clicks, back, reload, or menu
+changes, a fresh observation is required before choosing another target. A fresh
+observation can prove that the requested website is already open. Typing skips the
+fill operation when the actual target already has the exact value, focuses it for
+any subsequently requested submission, and still verifies fresh evidence. The
+specialized search tool reuses the current YouTube page and avoids resubmitting an
+already-displayed identical search. Generic forms and observed links remain the
+core path for other websites; there is no website-specific recovery workflow.
+
+A bare model "Done" cannot complete an unfinished ledger. At most two corrective
+continuations ask it to continue the current goal; otherwise the response reports
+partial progress. All verified requested goals finish the task immediately. Reading
+and inspection requests can use one final response with no available tools to
+produce the requested summary. Failure messages list what completed and which goal
+could not be verified; no private reasoning is returned. Recovery stays at the failed
+step rather than reopening completed sites or repeating prior searches.
+
+Limits are ten primitive outcomes, 36 total tool calls (including observations,
+verification, and rejected calls), three attempts per unresolved action/current
+outcome, and the existing two returned infrastructure failures per request. The
+old request cap was twelve calls; 36 accommodates roughly four to six meaningful
+operations plus observations and recovery while keeping a deterministic stop.
+The existing single navigation repair/retry per call is unchanged. Intent extraction
+and at most two corrective continuations are separately bounded model calls.
+
+Intent decomposition and semantic target selection still depend on the model. The
+ledger cannot independently prove that a natural-language request was decomposed
+perfectly or that a selected link is the intended first result. Same-URL SPA history,
+redirect aliases, new-tab links, bounded snapshots, and dynamic page changes can
+require more evidence or end in an honest partial failure. No live model/YouTube
+success is asserted by automated tests; Chromium tests intercept local HTML and
+script the model's decisions while exercising the production ledger and verifier.
 
 ### Action verification and recovery
 
@@ -701,6 +768,46 @@ judgement; grounding checks do not prove causation or complete natural-language
 understanding. Unsupported final success claims are replaced with an explicit
 unverified result. A later successful read cannot conceal an unresolved action.
 
+
+### Destination identity verification
+
+Link navigation, navigation prerequisites, task URL matching, and Back history use
+`destination_matches(expected, actual)` from `urls.py`. This compares normalized
+HTTP/HTTPS destinations, not raw strings. Hostname case, IDNA/default ports,
+unreserved percent encoding, and ordering of distinct query keys are normalized.
+Schemes, exact resource hosts, non-default ports, paths, fragments, query key/value
+case, blank values, and duplicate-value ordering remain significant. Different
+resource IDs or an added/missing unknown parameter cannot verify the same target.
+
+Only these default tracking keys are ignored: `utm_source`, `utm_medium`,
+`utm_campaign`, `utm_term`, `utm_content`, `utm_id`, `gclid`, `dclid`, `fbclid`, and
+`msclkid`. Every other query key is preserved by default, including `id`, `v`,
+`search_query`, `q`, `page`, `list`, and `t`. A small trusted route-policy registry
+adds `pp` as removable only for `/watch` on the explicitly listed YouTube hosts;
+it also requires a single nonempty, unchanged `v`. `pp` stays significant elsewhere.
+A reusable `DestinationPolicy` can declare additional required identity keys and
+removable decoration for other routes; required identity always takes precedence.
+These are backend policies, never model/page-supplied arguments or website workflows.
+
+An empty root path and `/` normalize together. Other trailing-slash aliases require
+an explicit trusted policy because unknown routes can use different resources at
+`/page` and `/page/`. Reserved encoded slashes, repeated slashes, hash routes,
+cross-host aliases, and scheme changes are not guessed equivalent. This is a
+conservative matcher, not a universal redirect resolver. The existing website-
+presence prerequisite can still recognize an already-open landing page separately
+from exact link/history resource identity.
+
+Successful navigation evidence records the observed URL, expected URL, and
+`match: destination_equivalent`. If only permitted decoration changed, the pending
+click clears, its Activate goal completes, and Back can proceed. Back must restore
+the known prior destination, using the same identity comparison even if the current
+video URL normalized after the original observation. A model citation to a new title
+or URL cannot override a known destination identity mismatch. Request URLs are never
+rewritten or stripped before navigation, and all existing freshness, execution,
+retry, lifecycle, and task-order checks still apply.
+
+
+### Exact input outcomes and recovery
 
 `type_text` supplies a browser-generated `expected_outcome` identifying the actual
 input node, its document, and the exact requested value. Controls have opaque
@@ -737,7 +844,7 @@ Sensitive-action restrictions continue to apply; the model is instructed to reco
 only harmless reversible actions and never repeat uncertain sensitive operations.
 
 Limits are **three attempts per unresolved action** (initial plus two recoveries)
-and **twelve total tool calls per request**, including inspection and verification.
+and **36 total tool calls per request**, including inspection and verification.
 Rejected calls also consume the request budget. Tool calls execute one at a time.
 These limits are deterministic; recovery target selection remains agent-driven.
 Proven pre-execution infrastructure failures have a separate limit of **two returned

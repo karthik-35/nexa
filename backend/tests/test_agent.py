@@ -15,6 +15,7 @@ def response(*calls, text='Done'):
 
 def model(monkeypatch, *responses):
     create = Mock(side_effect=responses)
+    monkeypatch.setattr(agent, 'plan_task', lambda client, message: None)
     monkeypatch.setattr(agent, 'get_client', lambda: SimpleNamespace(responses=SimpleNamespace(create=create)))
     return create
 
@@ -210,9 +211,9 @@ def test_three_attempt_limit_stops_fourth_execution(monkeypatch):
 def test_total_tool_limit_counts_calls_and_rejects_batches(monkeypatch):
     read = Mock(return_value={'success': True})
     monkeypatch.setitem(agent.TOOLS, 'read_page', read)
-    model(monkeypatch, *[response(('read_page', '{}')) for _ in range(13)])
+    model(monkeypatch, *[response(('read_page', '{}')) for _ in range(agent.MAX_TOOL_STEPS + 1)])
     result = agent.run_agent('Read')
-    assert not result['success'] and read.call_count == 12
+    assert not result['success'] and read.call_count == agent.MAX_TOOL_STEPS
     read.reset_mock()
     model(monkeypatch, response(('read_page', '{}'), ('read_page', '{}')))
     assert not agent.run_agent('Read')['success']
